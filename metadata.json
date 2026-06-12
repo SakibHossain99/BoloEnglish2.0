@@ -1,0 +1,6 @@
+{
+  "name": "Bolo English",
+  "description": "Premium Neo-Brutalist platform transitioning Bengali speakers to fluent English with active loops.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
