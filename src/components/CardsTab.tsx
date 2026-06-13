@@ -12,23 +12,29 @@ import {
 } from "lucide-react";
 
 export const CardsTab: React.FC = () => {
-  const { profile, updateUserXp, rateCard } = useGlobalState();
+  const {
+    profile,
+    rateCard,
+    activeReviewDeck,
+    setActiveReviewDeck,
+    initReviewSession,
+  } = useGlobalState();
   const flashcards = profile?.flashcards ?? [];
 
-  const [currentCardIndex, setCurrentCardIndex] = useState(0);
   const [flipped, setFlipped] = useState(false);
   const [xpEarnedThisSession, setXpEarnedThisSession] = useState(0);
 
-  // Derive "Today's Deck" isolation using real-time due comparison
-  const dueCards = flashcards.filter((card: any) => {
-    return !card.nextReviewDate || new Date(card.nextReviewDate) <= new Date();
-  });
+  // Derive "Today's Deck" isolation using real-time dynamic activeReviewDeck
+  const totalDue = activeReviewDeck.length;
+  const isDeckFinished = totalDue === 0;
+  const activeCard = activeReviewDeck[0] || null;
 
-  const totalDue = dueCards.length;
-  // If pointer index is out of bounds because list shrank, we handle gracefully
-  const isDeckFinished = totalDue === 0 || currentCardIndex >= totalDue;
-  const activeCard =
-    !isDeckFinished && totalDue > 0 ? dueCards[currentCardIndex] : null;
+  // Initialize session on mount
+  React.useEffect(() => {
+    initReviewSession();
+    setFlipped(false);
+    setXpEarnedThisSession(0);
+  }, []);
 
   const handleFlip = () => {
     playSound("click");
@@ -59,18 +65,11 @@ export const CardsTab: React.FC = () => {
 
     // Reset card turn over
     setFlipped(false);
-
-    // Real-time filtering automatically shifts the next cards down, so if we rated card at currentCardIndex,
-    // the next card naturally falls into currentCardIndex itself.
-    // However, if we were viewing the absolute last card in the queue, we decrement index to stay safe.
-    if (currentCardIndex >= totalDue - 1) {
-      setCurrentCardIndex(Math.max(0, totalDue - 2));
-    }
   };
 
   const restartReviewSession = () => {
     playSound("unlock");
-    setCurrentCardIndex(0);
+    initReviewSession();
     setXpEarnedThisSession(0);
     setFlipped(false);
   };
@@ -95,8 +94,8 @@ export const CardsTab: React.FC = () => {
           <div className="flex items-center space-x-2">
             <span className="text-lg">⚡</span>
             <span className="font-display font-black text-sm text-[#0F172A] uppercase tracking-wide">
-              Today's Review Load: {totalDue}{" "}
-              {totalDue === 1 ? "Card" : "Cards"}
+              Remaining Cards: {activeReviewDeck.length}{" "}
+              {activeReviewDeck.length === 1 ? "Card" : "Cards"}
             </span>
           </div>
           <span className="bg-[#7C3AED] text-white text-[9px] font-mono font-black px-2.5 py-0.5 rounded-full neo-border-sm uppercase border border-black animate-pulse">
@@ -275,7 +274,7 @@ export const CardsTab: React.FC = () => {
                     Again (আবার)
                   </span>
                   <span className="font-mono text-[9px] font-black text-[#991B1B] bg-white rounded-md px-1.5 py-0.5 mt-1 border border-red-200">
-                    +5 XP
+                    +0 XP
                   </span>
                 </button>
 
@@ -288,7 +287,7 @@ export const CardsTab: React.FC = () => {
                     Hard (কঠিন)
                   </span>
                   <span className="font-mono text-[9px] font-black text-[#9D174D] bg-white rounded-md px-1.5 py-0.5 mt-1 border border-pink-200">
-                    +15 XP
+                    +2 XP
                   </span>
                 </button>
 
@@ -301,7 +300,7 @@ export const CardsTab: React.FC = () => {
                     Good (ঠিক আছে)
                   </span>
                   <span className="font-mono text-[9px] font-black text-[#D97706] bg-white rounded-md px-1.5 py-0.5 mt-1 border border-amber-200">
-                    +25 XP
+                    +4 XP
                   </span>
                 </button>
 
@@ -314,7 +313,7 @@ export const CardsTab: React.FC = () => {
                     Mastered (সহজ)
                   </span>
                   <span className="font-mono text-[9px] font-black text-[#03543F] bg-white rounded-md px-1.5 py-0.5 mt-1 border border-emerald-200">
-                    +50 XP
+                    +5 XP
                   </span>
                 </button>
               </div>
@@ -336,14 +335,19 @@ export const CardsTab: React.FC = () => {
           <div className="flex justify-between items-center py-2 bg-stone-50 px-3 rounded-xl border border-stone-200 text-xs font-bold text-[#0F172A]">
             <button
               id="prev-card-btn"
-              disabled={currentCardIndex === 0}
+              disabled={activeReviewDeck.length <= 1}
               onClick={() => {
                 playSound("click");
                 setFlipped(false);
-                setCurrentCardIndex((prev) => Math.max(0, prev - 1));
+                setActiveReviewDeck((prevDeck) => {
+                  if (prevDeck.length <= 1) return prevDeck;
+                  const last = prevDeck[prevDeck.length - 1];
+                  const rest = prevDeck.slice(0, prevDeck.length - 1);
+                  return [last, ...rest];
+                });
               }}
               className={`flex items-center space-x-1 ${
-                currentCardIndex === 0
+                activeReviewDeck.length <= 1
                   ? "opacity-30 cursor-not-allowed"
                   : "hover:opacity-80 cursor-pointer"
               }`}
@@ -352,22 +356,26 @@ export const CardsTab: React.FC = () => {
             </button>
 
             <span className="text-[10px] font-mono text-stone-500 font-bold">
-              Reviewing: {currentCardIndex + 1} of {totalDue}
+              Remaining Cards: {activeReviewDeck.length}
             </span>
 
             <button
               id="next-card-btn"
+              disabled={activeReviewDeck.length <= 1}
               onClick={() => {
                 playSound("beep");
                 setFlipped(false);
-                setCurrentCardIndex((prev) => {
-                  if (prev + 1 >= totalDue) {
-                    return prev;
-                  }
-                  return prev + 1;
+                setActiveReviewDeck((prevDeck) => {
+                  if (prevDeck.length <= 1) return prevDeck;
+                  const [first, ...rest] = prevDeck;
+                  return [...rest, first];
                 });
               }}
-              className="flex items-center space-x-1 hover:opacity-80 cursor-pointer"
+              className={`flex items-center space-x-1 ${
+                activeReviewDeck.length <= 1
+                  ? "opacity-30 cursor-not-allowed"
+                  : "hover:opacity-80 cursor-pointer"
+              }`}
             >
               <span>Skip Card</span> <ChevronRight size={16} />
             </button>

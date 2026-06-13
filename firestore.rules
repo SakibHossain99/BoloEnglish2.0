@@ -1,0 +1,58 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Schema Validation Helper
+    function isValidUser(data) {
+      return data.xp is int && data.xp >= 0
+        && data.currentDay is int && data.currentDay >= 1
+        && data.streak is int && data.streak >= 0
+        && data.currency is int && data.currency >= 0
+        && data.inventory is list
+        && data.unlockedBadges is list
+        && data.metrics is map;
+    }
+
+    match /users/{userId} {
+      // Allow single document read: only the owner is permitted
+      allow get: if isOwner(userId) && isValidId(userId);
+      
+      // Let list request match queried userId strictly (forces safe search queries)
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+
+      // Allow creation of own profile map with validated zero-inflation matching schema
+      allow create: if isOwner(userId) && isValidId(userId) && isValidUser(incoming());
+
+      // Allow updates to own profile
+      allow update: if isOwner(userId) && isValidId(userId) && isValidUser(incoming());
+
+      // Allow deletion only by profile owner
+      allow delete: if isOwner(userId) && isValidId(userId);
+    }
+  }
+}

@@ -1,6 +1,6 @@
 import React from "react";
 import { useGlobalState } from "../globalState";
-import { Trophy, Award, Target, Milestone, Zap, Sparkles, CheckSquare, Calendar, ChevronRight } from "lucide-react";
+import { Trophy, Award, Target, Milestone, Zap, Sparkles, CheckSquare, Calendar, ChevronRight, Lock } from "lucide-react";
 
 export const ProgressTab: React.FC = () => {
   const { profile } = useGlobalState();
@@ -70,28 +70,32 @@ export const ProgressTab: React.FC = () => {
       title: "ZERO-MISTAKE STREAK",
       description: "Completed 5 mock/daily sessions without a single grammatical slip-up.",
       unlocked: totalLessons >= 1,
-      icon: "🎯"
+      icon: Target,
+      color: "text-blue-500",
     },
     {
       id: "badge2",
       title: "LITERAL HABITS ESCAPEE",
       description: "Achieved over 50% on Literal Translation Immunity score matrix.",
       unlocked: literalImmunity >= 50,
-      icon: "⚡"
+      icon: Zap,
+      color: "text-amber-500 animate-pulse",
     },
     {
       id: "badge3",
       title: "NATIVE DIALECT SPEED",
       description: "Achieve 90% Phonetic Fluency calibration to speak like an elite presenter.",
       unlocked: phoneticFluency >= 90,
-      icon: "🎙️"
+      icon: Award,
+      color: "text-[#7C3AED]",
     },
     {
       id: "badge4",
       title: "90-DAY FLIGHT DECK",
       description: "Complete all levels in Phase 3 networking fluency.",
       unlocked: totalLessons >= 15,
-      icon: "🏆"
+      icon: Trophy,
+      color: "text-[#F59E0B]",
     }
   ];
 
@@ -267,6 +271,7 @@ export const ProgressTab: React.FC = () => {
 
         <div className="space-y-3">
           {badges.map((badge) => {
+            const BadgeIconComp = badge.icon;
             return (
               <div 
                 key={badge.id} 
@@ -277,10 +282,14 @@ export const ProgressTab: React.FC = () => {
                 }`}
               >
                 <div className="flex items-center space-x-3">
-                  <div className={`text-2xl p-2 rounded-xl neo-border-sm ${
+                  <div className={`p-2.5 rounded-xl neo-border-sm flex items-center justify-center ${
                     badge.unlocked ? "bg-[#EDE9FE]" : "bg-stone-200"
                   }`}>
-                    {badge.unlocked ? badge.icon : "🔒"}
+                    {badge.unlocked ? (
+                      <BadgeIconComp className={`w-6 h-6 ${badge.color}`} />
+                    ) : (
+                      <Lock className="w-6 h-6 text-stone-500" />
+                    )}
                   </div>
                   <div>
                     <h4 className="font-display font-black text-xs uppercase text-[#0F172A]">

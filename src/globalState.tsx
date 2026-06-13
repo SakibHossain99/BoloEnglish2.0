@@ -1,5 +1,56 @@
-import React, { createContext, useContext, useState } from "react";
+import React, { createContext, useContext, useState, useEffect } from "react";
+import { onAuthStateChanged, signOut, deleteUser } from "firebase/auth";
+import { doc, getDoc, setDoc, updateDoc, deleteDoc } from "firebase/firestore";
+import { auth, db } from "./firebaseConfig";
 import { Flashcard } from "./types";
+
+// Firebase error diagnostics
+export enum OperationType {
+  CREATE = "create",
+  UPDATE = "update",
+  DELETE = "delete",
+  LIST = "list",
+  GET = "get",
+  WRITE = "write",
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 // Global user profile state representation
 export interface GlobalProfile {
@@ -57,6 +108,9 @@ interface GlobalStateContextType {
     nextReviewDate: number,
   ) => void;
   rateCard: (cardId: number, performanceRating: number) => void;
+  activeReviewDeck: any[];
+  setActiveReviewDeck: React.Dispatch<React.SetStateAction<any[]>>;
+  initReviewSession: () => void;
   awardArenaXP: (moduleId: string) => number;
   adjustWeakPoints?: (
     key: "literal_immunity" | "tense_accuracy" | "phonetic_fluency",
@@ -89,7 +143,9 @@ interface GlobalStateContextType {
   profile: GlobalProfile;
   userProfile?: any;
   loading: boolean;
+  isLoading: boolean;
   isGuestMode: boolean;
+  isGuestSession: boolean;
   setGuestProfile: (name: string) => void;
   updateUserXp: (amount: number) => Promise<void>;
   addUnlockedFlashcard: (card: Omit<Flashcard, "id">) => Promise<void>;
@@ -97,11 +153,13 @@ interface GlobalStateContextType {
   updateTheme: (theme: string) => Promise<void>;
   resetAllProgress: () => Promise<void>;
   logoutUser: () => Promise<void>;
+  deleteAccount: () => Promise<void>;
 }
 
 const GlobalStateContext = createContext<GlobalStateContextType | undefined>(
   undefined,
 );
+
 
 export const GlobalStateProvider: React.FC<{ children: React.ReactNode }> = ({
   children,
@@ -111,6 +169,7 @@ export const GlobalStateProvider: React.FC<{ children: React.ReactNode }> = ({
   const [currentDay, setCurrentDay] = useState<number>(1);
   const [streak, setStreak] = useState<number>(0);
   const [flashcards, setFlashcards] = useState<any[]>([]);
+  const [activeReviewDeck, setActiveReviewDeck] = useState<any[]>([]);
 
   // GAME ECONOMY STATES
   const [currency, setCurrency] = useState<number>(0);
@@ -123,8 +182,12 @@ export const GlobalStateProvider: React.FC<{ children: React.ReactNode }> = ({
   // Other compatibility states
   const [activeTheme, setActiveTheme] = useState<string>("default");
   const [name, setName] = useState<string>("Learner");
-  const [isGuestMode, setIsGuestMode] = useState<boolean>(true); // Keeps app immediately accessible
-  const [loading, setLoading] = useState<boolean>(false);
+  const [user, setUser] = useState<any>(null);
+  const [isGuestSession, setIsGuestSession] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [userProfile, setUserProfile] = useState<any>(null);
+  const [isHydrated, setIsHydrated] = useState<boolean>(false);
+
   const [completedArenaModules, setCompletedArenaModules] = useState<
     Record<string, { status: "Completed" | "Active"; timesCleared: number }>
   >({});
@@ -145,6 +208,159 @@ export const GlobalStateProvider: React.FC<{ children: React.ReactNode }> = ({
     advancedCompositionAttempts: 0,
     advancedCompositionMistakes: 0,
   });
+
+  // Centralized Firestore syncing helpers to push updates securely to live cloud database
+  const syncField = (fieldName: string, value: any) => {
+    if (auth.currentUser) {
+      updateDoc(doc(db, "users", auth.currentUser.uid), { [fieldName]: value }).catch(e => {
+        handleFirestoreError(e, OperationType.WRITE, `users/${auth.currentUser?.uid}`);
+      });
+    }
+  };
+
+  const syncFields = (fields: Record<string, any>) => {
+    if (auth.currentUser) {
+      updateDoc(doc(db, "users", auth.currentUser.uid), fields).catch(e => {
+        handleFirestoreError(e, OperationType.WRITE, `users/${auth.currentUser?.uid}`);
+      });
+    }
+  };
+
+  // onAuthStateChanged hook connected directly to standard Firebase Auth lifecycle
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      setIsLoading(true);
+      if (firebaseUser) {
+        setUser(firebaseUser);
+        setIsGuestSession(false);
+
+        const userDocRef = doc(db, "users", firebaseUser.uid);
+        try {
+          const userDocSnap = await getDoc(userDocRef);
+          
+          if (userDocSnap.exists()) {
+            // EXPLICIT OVERWRITE BLOCK SHIELD: DO NOT call setDoc or write any starting values
+            const existingData = userDocSnap.data();
+            setUserProfile(existingData);
+
+            // Fetch and hydrate individual states for comprehensive compliance
+            setXp(existingData.xp ?? 0);
+            setCurrentDay(existingData.currentDay ?? 1);
+            setStreak(existingData.streak ?? 0);
+            setCurrency(existingData.currency ?? 0);
+            setInventory(existingData.inventory ?? []);
+            setUnlockedBadges(existingData.unlockedBadges ?? []);
+            setFlashcards(existingData.flashcards ?? []);
+            setActiveTheme(existingData.activeTheme ?? "default");
+            setName(existingData.name ?? "Learner");
+            if (existingData.metrics) {
+              const m = existingData.metrics;
+              setMetrics({
+                literalAttempts: m.literalAttempts ?? 0,
+                literalMistakes: m.literalMistakes ?? 0,
+                tenseAttempts: m.tenseAttempts ?? 0,
+                tenseMistakes: m.tenseMistakes ?? 0,
+                phoneticAttempts: m.phoneticAttempts ?? 0,
+                phoneticSuccesses: m.phoneticSuccesses ?? 0,
+                advancedMediaAttempts: m.advancedMediaAttempts ?? 0,
+                advancedMediaMistakes: m.advancedMediaMistakes ?? 0,
+                advancedCompositionAttempts: m.advancedCompositionAttempts ?? 0,
+                advancedCompositionMistakes: m.advancedCompositionMistakes ?? 0,
+              });
+            }
+            if (existingData.completedArenaModules) {
+              setCompletedArenaModules(existingData.completedArenaModules);
+            }
+          } else {
+            // Absolute First-Time Registration Only
+            const initialProfile = {
+              name: firebaseUser.displayName || "Learner",
+              email: firebaseUser.email,
+              xp: 0,
+              currentDay: 1,
+              streak: 0,
+              currency: 0,
+              inventory: [],
+              unlockedBadges: [],
+              flashcards: [],
+              activeTheme: "default",
+              completedArenaModules: {},
+              metrics: {
+                literalAttempts: 0,
+                literalMistakes: 0,
+                tenseAttempts: 0,
+                tenseMistakes: 0,
+                phoneticAttempts: 0,
+                phoneticSuccesses: 0,
+                advancedMediaAttempts: 0,
+                advancedMediaMistakes: 0,
+                advancedCompositionAttempts: 0,
+                advancedCompositionMistakes: 0,
+              }
+            };
+            await setDoc(userDocRef, initialProfile);
+            setUserProfile(initialProfile);
+
+            // Hydrate individual states for first-time profile creation
+            setXp(0);
+            setCurrentDay(1);
+            setStreak(0);
+            setCurrency(0);
+            setInventory([]);
+            setUnlockedBadges([]);
+            setFlashcards([]);
+            setActiveTheme("default");
+            setName(firebaseUser.displayName || "Learner");
+            setCompletedArenaModules({});
+            setMetrics(initialProfile.metrics);
+          }
+          setIsHydrated(true);
+        } catch (err) {
+          handleFirestoreError(err, OperationType.GET, `users/${firebaseUser.uid}`);
+        } finally {
+          setIsLoading(false);
+        }
+      } else {
+        setUser(null);
+        setUserProfile(null);
+        setIsHydrated(false);
+        setIsLoading(false);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Automatic data synchronization engine to push local state modifications directly to the cloud
+  useEffect(() => {
+    if (!isHydrated || !auth.currentUser) return;
+
+    syncFields({
+      xp,
+      currentDay,
+      streak,
+      flashcards,
+      currency,
+      inventory,
+      unlockedBadges,
+      completedArenaModules,
+      metrics,
+      activeTheme,
+    });
+  }, [
+    xp,
+    currentDay,
+    streak,
+    flashcards,
+    currency,
+    inventory,
+    unlockedBadges,
+    completedArenaModules,
+    metrics,
+    activeTheme,
+    isHydrated
+  ]);
+
 
   const recordMetric = (
     discipline: "literal" | "tense" | "phonetic" | "adv_media" | "adv_composition",
@@ -228,9 +444,21 @@ export const GlobalStateProvider: React.FC<{ children: React.ReactNode }> = ({
     });
   };
 
+  const handleDeckCompletionRewards = () => {
+    addXp(15);
+    setCurrency((prev) => prev + 10);
+  };
+
+  const initReviewSession = () => {
+    const due = flashcards.filter((card: any) => {
+      return !card.nextReviewDate || new Date(card.nextReviewDate) <= new Date();
+    });
+    setActiveReviewDeck(due);
+  };
+
   // rateCard(cardId, performanceRating): updates card parameters using the strict SM-2 algorithm
   const rateCard = (cardId: number, performanceRating: number) => {
-    // Calibrate scoring modifications based on memory performance rating
+    // 1. Calculate and update the calibrated XP points (+0, +2, +5)
     let rateXp = 0;
     if (performanceRating === 1) rateXp = 0;
     else if (performanceRating === 2) rateXp = 2;
@@ -238,6 +466,13 @@ export const GlobalStateProvider: React.FC<{ children: React.ReactNode }> = ({
     else if (performanceRating === 4) rateXp = 5;
 
     addXp(rateXp);
+
+    // 2. Increment target analytical metrics safely
+    setMetrics((prev) => ({
+      ...prev,
+      literalAttempts: (prev.literalAttempts || 0) + 1,
+      literalMistakes: (prev.literalMistakes || 0) + (performanceRating === 1 ? 1 : 0),
+    }));
 
     setFlashcards((prev) =>
       prev.map((c) => {
@@ -280,6 +515,19 @@ export const GlobalStateProvider: React.FC<{ children: React.ReactNode }> = ({
         return c;
       }),
     );
+
+    // 3. CRITICAL ENGINE PROGRESSION: Update the active local session deck array
+    setActiveReviewDeck((prevDeck) => {
+      // Filter out the card that was just rated by its unique ID
+      const updatedDeck = prevDeck.filter((card) => card.id !== cardId);
+
+      // If the deck length reaches 0, trigger the milestone callback container
+      if (updatedDeck.length === 0) {
+        handleDeckCompletionRewards();
+      }
+
+      return updatedDeck;
+    });
   };
 
   // updateFlashcardSrs (id, isMastered, nextReviewDate): Updates a flashcard based on user reviews
@@ -457,7 +705,8 @@ export const GlobalStateProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const setGuestProfile = (guestName: string) => {
     setName(guestName || "Guest Learner");
-    setIsGuestMode(true);
+    setIsGuestSession(true);
+    setUser("Guest");
   };
 
   const updateUserXp = async (amount: number) => {
@@ -465,7 +714,9 @@ export const GlobalStateProvider: React.FC<{ children: React.ReactNode }> = ({
   };
 
   const addUnlockedFlashcard = async (card: Omit<Flashcard, "id">) => {
-    addFlashcard(card.bengali, card.english);
+    const nextFlashcards = [...flashcards, { id: Date.now(), ...card }];
+    setFlashcards(nextFlashcards);
+    syncField("flashcards", nextFlashcards);
   };
 
   const advanceDay = async (nextDay: number) => {
@@ -474,6 +725,7 @@ export const GlobalStateProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const updateTheme = async (theme: string) => {
     setActiveTheme(theme);
+    syncField("activeTheme", theme);
   };
 
   const resetAllProgress = async () => {
@@ -506,12 +758,141 @@ export const GlobalStateProvider: React.FC<{ children: React.ReactNode }> = ({
     });
     setActiveTheme("default");
     setName("Learner");
+
+    if (auth.currentUser) {
+      const initialProfile = {
+        xp: 0,
+        currentDay: 1,
+        streak: 0,
+        currency: 0,
+        inventory: [],
+        unlockedBadges: [],
+        flashcards: [],
+        activeTheme: "default",
+        name: auth.currentUser?.displayName || "Learner",
+        completedArenaModules: {},
+        metrics: {
+          literalAttempts: 0,
+          literalMistakes: 0,
+          tenseAttempts: 0,
+          tenseMistakes: 0,
+          phoneticAttempts: 0,
+          phoneticSuccesses: 0,
+          advancedMediaAttempts: 0,
+          advancedMediaMistakes: 0,
+          advancedCompositionAttempts: 0,
+          advancedCompositionMistakes: 0,
+        }
+      };
+      await setDoc(doc(db, "users", auth.currentUser.uid), initialProfile).catch(e => {
+        handleFirestoreError(e, OperationType.WRITE, `users/${auth.currentUser?.uid}`);
+      });
+    }
   };
 
   const logoutUser = async () => {
-    setIsGuestMode(false);
-    resetAllProgress();
+    setIsHydrated(false);
+    await signOut(auth);
+    setIsGuestSession(false);
+    setUser(null);
+    setUserProfile(null);
+    setXp(0);
+    setCurrentDay(1);
+    setStreak(0);
+    setFlashcards([]);
+    setCompletedArenaModules({});
+    setCurrency(0);
+    setInventory([]);
+    setAvailableChests(0);
+    setConsecutivePerfectLessons(0);
+    setUnlockedBadges([]);
+    setWeakPoints({
+      literal_immunity: 80,
+      tense_accuracy: 85,
+      phonetic_fluency: 88,
+    });
+    setMetrics({
+      literalAttempts: 0,
+      literalMistakes: 0,
+      tenseAttempts: 0,
+      tenseMistakes: 0,
+      phoneticAttempts: 0,
+      phoneticSuccesses: 0,
+      advancedMediaAttempts: 0,
+      advancedMediaMistakes: 0,
+      advancedCompositionAttempts: 0,
+      advancedCompositionMistakes: 0,
+    });
+    setActiveTheme("default");
+    setName("Learner");
   };
+
+  const deleteAccount = async () => {
+    setIsHydrated(false);
+    if (auth.currentUser) {
+      const uid = auth.currentUser.uid;
+      const currentUser = auth.currentUser;
+      try {
+        await deleteDoc(doc(db, "users", uid));
+      } catch (err) {
+        handleFirestoreError(err, OperationType.DELETE, `users/${uid}`);
+      }
+      try {
+        await deleteUser(currentUser);
+      } catch (err) {
+        console.error("Auth deleteUser failed or reauth required:", err);
+      }
+    }
+    setIsGuestSession(false);
+    setUser(null);
+    setUserProfile(null);
+    setXp(0);
+    setCurrentDay(1);
+    setStreak(0);
+    setFlashcards([]);
+    setCompletedArenaModules({});
+    setCurrency(0);
+    setInventory([]);
+    setAvailableChests(0);
+    setConsecutivePerfectLessons(0);
+    setUnlockedBadges([]);
+    setWeakPoints({
+      literal_immunity: 80,
+      tense_accuracy: 85,
+      phonetic_fluency: 88,
+    });
+    setMetrics({
+      literalAttempts: 0,
+      literalMistakes: 0,
+      tenseAttempts: 0,
+      tenseMistakes: 0,
+      phoneticAttempts: 0,
+      phoneticSuccesses: 0,
+      advancedMediaAttempts: 0,
+      advancedMediaMistakes: 0,
+      advancedCompositionAttempts: 0,
+      advancedCompositionMistakes: 0,
+    });
+    setActiveTheme("default");
+    setName("Learner");
+  };
+
+  // Combine userProfile state with react state variables for live updating and reactive data synchronization
+  const mergedUserProfile = userProfile
+    ? {
+        ...userProfile,
+        name,
+        xp,
+        currentDay,
+        streak,
+        currency,
+        inventory,
+        unlockedBadges,
+        metrics,
+        completedArenaModules,
+        activeTheme,
+      }
+    : profile;
 
   const contextValue: GlobalStateContextType = {
     xp,
@@ -527,6 +908,9 @@ export const GlobalStateProvider: React.FC<{ children: React.ReactNode }> = ({
     completeLesson,
     updateFlashcardSrs,
     rateCard,
+    activeReviewDeck,
+    setActiveReviewDeck,
+    initReviewSession,
     awardArenaXP,
     adjustWeakPoints,
     openChest,
@@ -537,11 +921,13 @@ export const GlobalStateProvider: React.FC<{ children: React.ReactNode }> = ({
     recordMetric,
 
     // Compatibility fields
-    user: { uid: "guest_user_123", displayName: name },
-    profile,
-    userProfile: profile,
-    loading,
-    isGuestMode,
+    user,
+    profile: mergedUserProfile,
+    userProfile: mergedUserProfile,
+    loading: isLoading,
+    isLoading,
+    isGuestMode: isGuestSession,
+    isGuestSession,
     setGuestProfile,
     updateUserXp,
     addUnlockedFlashcard,
@@ -549,7 +935,9 @@ export const GlobalStateProvider: React.FC<{ children: React.ReactNode }> = ({
     updateTheme,
     resetAllProgress,
     logoutUser,
+    deleteAccount,
   };
+
 
   return (
     <GlobalStateContext.Provider value={contextValue}>

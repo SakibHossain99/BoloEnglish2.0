@@ -13,6 +13,8 @@ import {
   Lock,
   Shield,
   Zap,
+  Trophy,
+  Target,
 } from "lucide-react";
 
 export const ProfileTab: React.FC = () => {
@@ -23,6 +25,7 @@ export const ProfileTab: React.FC = () => {
     updateTheme,
     resetAllProgress,
     logoutUser,
+    deleteAccount,
     openChest,
     buyShopItem,
     availableChests,
@@ -57,17 +60,20 @@ export const ProfileTab: React.FC = () => {
     {
       id: "SVO Marksman",
       desc: "Perfectly complete 5 lessons consecutively.",
-      icon: "🎯",
+      icon: Target,
+      color: "text-blue-600",
     },
     {
       id: "Bonglish Exorcist",
       desc: "Reach Day 7 or perfect Phase 1 Habit Buster.",
-      icon: "⚔️",
+      icon: Shield,
+      color: "text-rose-600",
     },
     {
       id: "Fluent Overlord",
       desc: "Accumulate 500+ XP dynamically.",
-      icon: "👑",
+      icon: Trophy,
+      color: "text-amber-600",
     },
   ];
 
@@ -120,13 +126,14 @@ export const ProfileTab: React.FC = () => {
   const renderBadgeComponent = (badgeId: string) => {
     const badge = BADGE_DEFS.find((b) => b.id === badgeId);
     if (!badge) return null;
+    const BadgeIconComp = badge.icon;
     return (
       <div
         key={badge.id}
-        className="flex gap-3 p-3 rounded-xl border-2 transition-all bg-[#D1FAE5] border-[#10B981] text-[#065F46] border-b-4"
+        className="flex gap-3 p-3 rounded-xl border-2 transition-all bg-[#D1FAE5] border-[#10B981] text-[#065F46] border-b-4 items-center"
       >
-        <div className="text-2xl flex items-center justify-center w-10">
-          {badge.icon}
+        <div className="flex items-center justify-center w-10">
+          <BadgeIconComp className={`w-8 h-8 ${badge.color}`} />
         </div>
         <div>
           <h5 className="font-display font-black text-xs uppercase">
@@ -345,6 +352,41 @@ export const ProfileTab: React.FC = () => {
             <p className="text-stone-500 font-semibold text-xs py-4 px-2 text-center bg-stone-50 border-2 border-dashed border-stone-300 rounded-xl">
               No achievements unlocked yet. Clear your first lesson milestone!
             </p>
+          )}
+        </div>
+      </div>
+
+      {/* ACCOUNT SETTINGS: Sign out and delete account */}
+      <div className="bg-white p-5 rounded-2xl neo-border border-4 border-[#0F172A] neo-shadow-sm space-y-4">
+        <h4 className="font-display font-black text-xs text-[#0F172A] uppercase tracking-wide flex items-center">
+          <User size={16} className="text-[#0F172A] mr-1.5" />
+          ACCOUNT SETTINGS
+        </h4>
+
+        <div className="space-y-3">
+          <button
+            onClick={async () => {
+              playSound("click");
+              await logoutUser();
+            }}
+            className="w-full py-3 bg-[#FEF3C7] text-[#D97706] font-display font-black text-xs uppercase rounded-xl border-2 border-[#0F172A] neo-shadow-sm hover:translate-y-[2px] hover:translate-x-[2px] transition-all duration-100 cursor-pointer flex items-center justify-center space-x-1.5"
+          >
+            <span>লগ আউট করুন (Sign Out)</span>
+          </button>
+
+          {!isGuestMode && (
+            <button
+              onClick={async () => {
+                playSound("error");
+                const confirmDelete = window.confirm("আপনি কি নিশ্চিত যে আপনি আপনার অ্যাকাউন্ট এবং সমস্ত ক্লাউড ডেটা স্থায়ীভাবে মুছে ফেলতে চান? (Are you sure you want to permanently delete your account and all cloud data?)");
+                if (confirmDelete) {
+                  await deleteAccount();
+                }
+              }}
+              className="w-full py-3 bg-[#FCA5A5] text-[#991B1B] font-display font-black text-xs uppercase rounded-xl border-2 border-[#0F172A] neo-shadow-sm hover:translate-y-[2px] hover:translate-x-[2px] transition-all duration-100 cursor-pointer flex items-center justify-center space-x-1.5"
+            >
+              <span>অ্যাকাউন্ট মুছে ফেলুন (Delete Account)</span>
+            </button>
           )}
         </div>
       </div>

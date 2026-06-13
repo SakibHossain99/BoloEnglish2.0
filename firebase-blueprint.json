@@ -1,0 +1,46 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Represents the student's progress, game economy, badges, and learning metrics.",
+      "type": "object",
+      "properties": {
+        "xp": {
+          "type": "integer",
+          "description": "Total experience points gained."
+        },
+        "currentDay": {
+          "type": "integer",
+          "description": "The current learning day index in the 90-day blueprint."
+        },
+        "streak": {
+          "type": "integer",
+          "description": "Current consecutive days active streak."
+        },
+        "currency": {
+          "type": "integer",
+          "description": "Total Bolo Coins earned in game economy."
+        },
+        "inventory": {
+          "type": "array",
+          "description": "Items in user's inventory."
+        },
+        "unlockedBadges": {
+          "type": "array",
+          "description": "List of unlocked proficiency achievement badge strings."
+        },
+        "metrics": {
+          "type": "object",
+          "description": "Detailed multi-core learning tracking statistics."
+        }
+      },
+      "required": ["xp", "currentDay", "streak", "currency", "inventory", "unlockedBadges", "metrics"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Storage pathway for isolated user profiles."
+    }
+  }
+}

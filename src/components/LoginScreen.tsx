@@ -2,7 +2,9 @@ import React, { useState } from "react";
 import { 
   signInWithEmailAndPassword, 
   createUserWithEmailAndPassword, 
-  updateProfile 
+  updateProfile,
+  signInWithPopup,
+  GoogleAuthProvider
 } from "firebase/auth";
 import { auth } from "../firebaseConfig";
 import { useGlobalState } from "../globalState";
@@ -22,6 +24,30 @@ export const LoginScreen: React.FC = () => {
   // Guest inputs state
   const [guestName, setGuestName] = useState("");
   const [showGuestForm, setShowGuestForm] = useState(false);
+
+  const handleGoogleSignIn = async () => {
+    setErrorMsg(null);
+    setSuccessMsg(null);
+    setAuthLoading(true);
+    try {
+      const provider = new GoogleAuthProvider();
+      provider.setCustomParameters({ prompt: "select_account" });
+      
+      const userCredential = await signInWithPopup(auth, provider);
+      setSuccessMsg(`স্বাগতম ${userCredential.user.displayName || "Learner"}! আপনি সফলভাবে প্রবেশ করেছেন।`);
+    } catch (err: any) {
+      console.error("Google Auth error:", err);
+      let userFriendlyErr = err.message || "Google sign in failed.";
+      if (err.code === "auth/popup-blocked") {
+        userFriendlyErr = "পপআপ উইন্ডোটি ব্লক করা হয়েছে। অনুগ্রহ করে আমাদের সাইটের জন্য পপআপ অনুমতি দিন। (Popup blocked. Please allow popups for this site.)";
+      } else if (err.code === "auth/popup-closed-by-user") {
+        userFriendlyErr = "পপআপ বন্ধ করা হয়েছে। (Google Login popup was closed before completion.)";
+      }
+      setErrorMsg(userFriendlyErr);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,16 +75,28 @@ export const LoginScreen: React.FC = () => {
 
         // Create fresh Firebase auth account
         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-        // Set displayName in authentic profile
         await updateProfile(userCredential.user, {
           displayName: displayName.trim()
         });
-        
         setSuccessMsg("অ্যাকাউন্ট সফলভাবে তৈরি করা হয়েছে! (Account created successfully!)");
       } else {
-        // Simple sign in
-        await signInWithEmailAndPassword(auth, email, password);
-        setSuccessMsg("স্বাগতম! আপনি সফলভাবে লগইন করেছেন। (Welcome back!)");
+        // Dynamic Fallthrough: attempt sign-in, if user does not exist, run registration automatically
+        try {
+          await signInWithEmailAndPassword(auth, email, password);
+          setSuccessMsg("স্বাগতম! আপনি সফলভাবে লগইন করেছেন। (Welcome back!)");
+        } catch (signInErr: any) {
+          // If user does not exist or invalid credentials, fallback to create user
+          if (signInErr.code === "auth/user-not-found" || signInErr.code === "auth/invalid-credential") {
+            const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+            const fallbackName = displayName.trim() || email.split("@")[0] || "Learner";
+            await updateProfile(userCredential.user, {
+              displayName: fallbackName
+            });
+            setSuccessMsg("অ্যাকাউন্টটি স্বয়ংক্রিয়ভাবে তৈরি হয়েছে! (Account auto-created successfully!)");
+          } else {
+            throw signInErr;
+          }
+        }
       }
     } catch (err: any) {
       console.error("Auth error:", err);
@@ -76,6 +114,7 @@ export const LoginScreen: React.FC = () => {
       setAuthLoading(false);
     }
   };
+
 
   const startGuestSession = (e: React.FormEvent) => {
     e.preventDefault();
@@ -196,6 +235,40 @@ export const LoginScreen: React.FC = () => {
                   <span>{isRegistering ? "নতুন অ্যাকাউন্ট তৈরি করুন" : "অ্যাকাউন্টে প্রবেশ করুন"}</span>
                 </>
               )}
+            </button>
+
+            {/* GOOGLE SIGN IN OPTION */}
+            <div className="relative py-2 flex items-center justify-center">
+              <div className="flex-grow border-t-2 border-dashed border-[#0F172A] opacity-40"></div>
+              <span className="flex-shrink mx-4 text-xs font-mono font-bold uppercase text-[#0F172A] opacity-60">অথবা (Or)</span>
+              <div className="flex-grow border-t-2 border-dashed border-[#0F172A] opacity-40"></div>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              disabled={authLoading}
+              className="w-full bg-white text-[#0F172A] border-2 border-[#0F172A] py-3 font-bold uppercase text-xs tracking-wide shadow-[4px_4px_0px_#0F172A] hover:translate-y-[2px] hover:translate-x-[2px] transition-all duration-100 cursor-pointer flex items-center justify-center gap-2"
+            >
+              <svg className="w-4 h-4 shrink-0" viewBox="0 0 24 24">
+                <path
+                  fill="#4285F4"
+                  d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v3.9h6.61a5.66 5.66 0 0 1-2.45 3.71v3.08h3.95c2.31-2.13 3.63-5.27 3.63-8.62z"
+                />
+                <path
+                  fill="#34A853"
+                  d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.95-3.08c-1.1.74-2.51 1.18-3.98 1.18-3.07 0-5.67-2.08-6.6-4.88H1.35v3.18A11.99 11.99 0 0 0 12 24z"
+                />
+                <path
+                  fill="#FBBC05"
+                  d="M5.4 14.31a7.16 7.16 0 0 1 0-2.62V8.51H1.35a11.99 11.99 0 0 0 0 6.98l4.05-3.18z"
+                />
+                <path
+                  fill="#EA4335"
+                  d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.43-3.43A11.93 11.93 0 0 0 12 0c-4.41 0-8.24 2.42-10.22 5.96l4.05 3.18c.93-2.8 3.53-4.88 6.6-4.88z"
+                />
+              </svg>
+              <span>গুগল দিয়ে প্রবেশ করুন (Sign in with Google)</span>
             </button>
 
             {/* TOGGLE REGISTRATION VIEW */}
